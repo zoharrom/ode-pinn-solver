@@ -1,0 +1,1157 @@
+================================================================================
+SIR PINNs PROJECT — LINE-BY-LINE CODE EXPLANATION
+================================================================================
+
+This document explains every line in each file of the SIR Physics-Informed
+Neural Network (PINN) project. The project learns solutions to the SIR epidemic
+model by training a neural network to satisfy the governing differential
+equations, initial conditions, and population conservation.
+
+
+================================================================================
+FILE: model.py
+================================================================================
+Purpose: Defines the neural network architecture that approximates S(t), I(t),
+         and R(t) as functions of time t.
+
+--------------------------------------------------------------------------------
+Line 1: import torch
+--------------------------------------------------------------------------------
+Imports PyTorch, the deep learning framework used for tensors, automatic
+differentiation, and neural network modules.
+
+--------------------------------------------------------------------------------
+Line 2: import torch.nn as nn
+--------------------------------------------------------------------------------
+Imports PyTorch's neural network submodule (aliased as nn), which provides
+layers like Linear, activation functions, and the Module base class.
+
+--------------------------------------------------------------------------------
+Line 3: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability; separates imports from class definition.
+
+--------------------------------------------------------------------------------
+Line 4: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 5: class SIRPINN(nn.Module):
+--------------------------------------------------------------------------------
+Defines a class named SIRPINN that inherits from nn.Module. All PyTorch models
+must subclass nn.Module so parameters are tracked and optimizers can update them.
+
+--------------------------------------------------------------------------------
+Line 6:     """Physics-informed neural network for the SIR epidemic model."""
+--------------------------------------------------------------------------------
+Docstring describing what this class represents: a PINN for the SIR model.
+
+--------------------------------------------------------------------------------
+Line 7: (blank line)
+--------------------------------------------------------------------------------
+Blank line inside the class for readability.
+
+--------------------------------------------------------------------------------
+Line 8:     def __init__(self, hidden_layers=4, hidden_units=64):
+--------------------------------------------------------------------------------
+Constructor method. hidden_layers=4 means 4 weight layers total (input→hidden
+and hidden→hidden blocks). hidden_units=64 is the width of each hidden layer.
+
+--------------------------------------------------------------------------------
+Line 9:         super().__init__()
+--------------------------------------------------------------------------------
+Calls the parent nn.Module constructor so PyTorch registers submodules and
+parameters correctly.
+
+--------------------------------------------------------------------------------
+Line 10:         layers = [nn.Linear(1, hidden_units), nn.Tanh()]
+--------------------------------------------------------------------------------
+Starts building a list of layers. nn.Linear(1, hidden_units) maps a single
+input (time t) to 64 hidden neurons. nn.Tanh() applies the hyperbolic tangent
+activation, which helps smooth outputs and bounded gradients.
+
+--------------------------------------------------------------------------------
+Line 11:         for _ in range(hidden_layers - 1):
+--------------------------------------------------------------------------------
+Loops hidden_layers - 1 times (3 times with default settings) to add more
+hidden blocks. The first hidden block was already added on line 10.
+
+--------------------------------------------------------------------------------
+Line 12:             layers.extend([nn.Linear(hidden_units, hidden_units), nn.Tanh()])
+--------------------------------------------------------------------------------
+For each loop iteration, appends another hidden layer (64→64) and Tanh
+activation. extend() adds both items to the layers list.
+
+--------------------------------------------------------------------------------
+Line 13:         layers.append(nn.Linear(hidden_units, 3))
+--------------------------------------------------------------------------------
+Adds the final output layer mapping 64 hidden units to 3 outputs: S, I, and R
+at each time point.
+
+--------------------------------------------------------------------------------
+Line 14:         self.net = nn.Sequential(*layers)
+--------------------------------------------------------------------------------
+Wraps all layers in nn.Sequential, which runs them in order. *layers unpacks the
+list into separate arguments. self.net is stored as an attribute of the model.
+
+--------------------------------------------------------------------------------
+Line 15: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating __init__ from forward.
+
+--------------------------------------------------------------------------------
+Line 16:     def forward(self, t):
+--------------------------------------------------------------------------------
+Defines the forward pass: how input tensor t flows through the network. Called
+automatically when you invoke model(t).
+
+--------------------------------------------------------------------------------
+Line 17:         return self.net(t)
+--------------------------------------------------------------------------------
+Passes input t through the sequential network and returns the output tensor of
+shape (batch_size, 3) containing predicted S, I, R values.
+
+--------------------------------------------------------------------------------
+Line 18: (blank line)
+--------------------------------------------------------------------------------
+End of file; trailing newline is standard Python style.
+
+
+================================================================================
+FILE: physics.py
+================================================================================
+Purpose: Defines physics-based loss terms — ODE residuals, initial conditions,
+         and population conservation — used during PINN training.
+
+--------------------------------------------------------------------------------
+Line 1: import torch
+--------------------------------------------------------------------------------
+Imports PyTorch for tensors, autograd, and mathematical operations.
+
+--------------------------------------------------------------------------------
+Line 2: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating imports from functions.
+
+--------------------------------------------------------------------------------
+Line 3: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 4: def sir_residuals(t, model, beta, gamma):
+--------------------------------------------------------------------------------
+Defines a function that computes how far the network's predictions violate the
+SIR differential equations. beta is infection rate; gamma is recovery rate.
+
+--------------------------------------------------------------------------------
+Line 5-11: (docstring)
+--------------------------------------------------------------------------------
+Multi-line docstring documenting the three ODEs the residuals enforce:
+  dS/dt = -beta * S * I
+  dI/dt = beta * S * I - gamma * I
+  dR/dt = gamma * I
+
+--------------------------------------------------------------------------------
+Line 12:     t = t.requires_grad_(True)
+--------------------------------------------------------------------------------
+Marks tensor t as requiring gradients so PyTorch can compute dS/dt, dI/dt, and
+dR/dt via automatic differentiation. requires_grad_(True) modifies t in place.
+
+--------------------------------------------------------------------------------
+Line 13:     output = model(t)
+--------------------------------------------------------------------------------
+Runs the neural network on collocation time points t to get predicted S, I, R.
+
+--------------------------------------------------------------------------------
+Line 14:     s, i, r = output[:, 0:1], output[:, 1:2], output[:, 2:3]
+--------------------------------------------------------------------------------
+Splits the 3-column output into separate tensors for S, I, and R. Slicing
+0:1 keeps shape (N, 1) instead of (N,) so autograd.grad works consistently.
+
+--------------------------------------------------------------------------------
+Line 15: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 16:     ds_dt = torch.autograd.grad(s, t, grad_outputs=torch.ones_like(s), create_graph=True)[0]
+--------------------------------------------------------------------------------
+Computes derivative of s with respect to t (dS/dt) at each collocation point.
+grad_outputs=torch.ones_like(s) scales the backward pass. create_graph=True
+allows second-order derivatives during training. [0] extracts the gradient
+tensor from the returned tuple.
+
+--------------------------------------------------------------------------------
+Line 17:     di_dt = torch.autograd.grad(i, t, grad_outputs=torch.ones_like(i), create_graph=True)[0]
+--------------------------------------------------------------------------------
+Same as line 16, but for dI/dt.
+
+--------------------------------------------------------------------------------
+Line 18:     dr_dt = torch.autograd.grad(r, t, grad_outputs=torch.ones_like(r), create_graph=True)[0]
+--------------------------------------------------------------------------------
+Same as line 16, but for dR/dt.
+
+--------------------------------------------------------------------------------
+Line 19: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating derivative computation from residual formulas.
+
+--------------------------------------------------------------------------------
+Line 20:     f_s = ds_dt + beta * s * i
+--------------------------------------------------------------------------------
+Residual for the S equation. Should be zero if dS/dt = -beta*S*I. Nonzero
+values mean the network violates the susceptible ODE.
+
+--------------------------------------------------------------------------------
+Line 21:     f_i = di_dt - beta * s * i + gamma * i
+--------------------------------------------------------------------------------
+Residual for the I equation. Should be zero if dI/dt = beta*S*I - gamma*I.
+
+--------------------------------------------------------------------------------
+Line 22:     f_r = dr_dt - gamma * i
+--------------------------------------------------------------------------------
+Residual for the R equation. Should be zero if dR/dt = gamma*I.
+
+--------------------------------------------------------------------------------
+Line 23: (blank line)
+--------------------------------------------------------------------------------
+Blank line before return statement.
+
+--------------------------------------------------------------------------------
+Line 24:     return f_s, f_i, f_r
+--------------------------------------------------------------------------------
+Returns the three residual tensors for use in the physics loss (squared and
+averaged in train.py).
+
+--------------------------------------------------------------------------------
+Line 25: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating functions.
+
+--------------------------------------------------------------------------------
+Line 26: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 27: def initial_condition_loss(model, t0, s0, i0, r0):
+--------------------------------------------------------------------------------
+Defines loss for matching initial conditions at t = 0. t0 is time zero; s0, i0,
+r0 are target initial values for S, I, R.
+
+--------------------------------------------------------------------------------
+Line 28:     """Penalty for mismatch with initial conditions at t = 0."""
+--------------------------------------------------------------------------------
+Docstring explaining this loss penalizes deviation from known starting values.
+
+--------------------------------------------------------------------------------
+Line 29:     output = model(t0)
+--------------------------------------------------------------------------------
+Evaluates the network at t = 0 to get predicted initial S, I, R.
+
+--------------------------------------------------------------------------------
+Line 30:     s, i, r = output[:, 0], output[:, 1], output[:, 2]
+--------------------------------------------------------------------------------
+Extracts the three output columns as 1D tensors (only one time point at t0).
+
+--------------------------------------------------------------------------------
+Line 31:     return (
+--------------------------------------------------------------------------------
+Starts a multi-line return expression for the total initial-condition loss.
+
+--------------------------------------------------------------------------------
+Line 32:         torch.mean((s - s0) ** 2)
+--------------------------------------------------------------------------------
+Mean squared error between predicted S at t=0 and target s0.
+
+--------------------------------------------------------------------------------
+Line 33:         + torch.mean((i - i0) ** 2)
+--------------------------------------------------------------------------------
+Mean squared error for I at t=0 vs i0; added to the S term.
+
+--------------------------------------------------------------------------------
+Line 34:         + torch.mean((r - r0) ** 2)
+--------------------------------------------------------------------------------
+Mean squared error for R at t=0 vs r0; added to S and I terms.
+
+--------------------------------------------------------------------------------
+Line 35:     )
+--------------------------------------------------------------------------------
+Closes the return expression; sum of three MSE terms is the IC loss.
+
+--------------------------------------------------------------------------------
+Line 36: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating functions.
+
+--------------------------------------------------------------------------------
+Line 37: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 38: def conservation_loss(model, t):
+--------------------------------------------------------------------------------
+Defines loss enforcing S + I + R = 1 (normalized total population).
+
+--------------------------------------------------------------------------------
+Line 39:     """Penalty when S + I + R deviates from 1."""
+--------------------------------------------------------------------------------
+Docstring: populations are fractions of total population, so their sum must be 1.
+
+--------------------------------------------------------------------------------
+Line 40:     output = model(t)
+--------------------------------------------------------------------------------
+Network predictions at all time points in t.
+
+--------------------------------------------------------------------------------
+Line 41:     return torch.mean((output.sum(dim=1) - 1.0) ** 2)
+--------------------------------------------------------------------------------
+Sums S+I+R along dim=1 (per row/time point), subtracts 1, squares the error,
+and averages. Penalizes any violation of population conservation.
+
+--------------------------------------------------------------------------------
+Line 42: (blank line)
+--------------------------------------------------------------------------------
+End of file.
+
+
+================================================================================
+FILE: train.py
+================================================================================
+Purpose: Main script — sets parameters, trains the PINN, compares to SciPy
+         numerical solution, and plots results.
+
+--------------------------------------------------------------------------------
+Line 1: import numpy as np
+--------------------------------------------------------------------------------
+Imports NumPy for array math and compatibility with SciPy/Matplotlib.
+
+--------------------------------------------------------------------------------
+Line 2: import torch
+--------------------------------------------------------------------------------
+Imports PyTorch for model training and GPU/CPU device handling.
+
+--------------------------------------------------------------------------------
+Line 3: import matplotlib.pyplot as plt
+--------------------------------------------------------------------------------
+Imports Matplotlib's pyplot interface for plotting training results.
+
+--------------------------------------------------------------------------------
+Line 4: from scipy.integrate import odeint
+--------------------------------------------------------------------------------
+Imports odeint from SciPy to numerically solve the SIR ODEs for reference
+"true" curves.
+
+--------------------------------------------------------------------------------
+Line 5: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating external imports from local imports.
+
+--------------------------------------------------------------------------------
+Line 6: from model import SIRPINN
+--------------------------------------------------------------------------------
+Imports the neural network class from model.py in the same directory.
+
+--------------------------------------------------------------------------------
+Line 7: from physics import conservation_loss, initial_condition_loss, sir_residuals
+--------------------------------------------------------------------------------
+Imports the three loss-related functions from physics.py.
+
+--------------------------------------------------------------------------------
+Line 8: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating imports from configuration constants.
+
+--------------------------------------------------------------------------------
+Line 9: # Epidemic parameters (normalized population: S + I + R = 1)
+--------------------------------------------------------------------------------
+Comment: following constants define the SIR epidemic; populations are fractions.
+
+--------------------------------------------------------------------------------
+Line 10: BETA = 2.0
+--------------------------------------------------------------------------------
+Infection/transmission rate β in the SIR model. Higher β spreads infection faster.
+
+--------------------------------------------------------------------------------
+Line 11: GAMMA = 1.0
+--------------------------------------------------------------------------------
+Recovery rate γ. Infected individuals recover at rate γ per unit time.
+
+--------------------------------------------------------------------------------
+Line 12: S0, I0, R0 = 0.99, 0.01, 0.0
+--------------------------------------------------------------------------------
+Initial conditions: 99% susceptible, 1% infected, 0% recovered at t = 0.
+
+--------------------------------------------------------------------------------
+Line 13: T_MAX = 100.0
+--------------------------------------------------------------------------------
+Maximum simulation/training time horizon (time units from 0 to 100).
+
+--------------------------------------------------------------------------------
+Line 14: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating epidemic params from training hyperparameters.
+
+--------------------------------------------------------------------------------
+Line 15: # Training hyperparameters (tuned for faster epidemic dynamics at beta=2, gamma=1)
+--------------------------------------------------------------------------------
+Comment explaining these settings were adjusted for β=2, γ=1 dynamics.
+
+--------------------------------------------------------------------------------
+Line 16: EPOCHS = 20000
+--------------------------------------------------------------------------------
+Number of full passes over the loss and optimizer update (training iterations).
+
+--------------------------------------------------------------------------------
+Line 17: LR = 5e-4
+--------------------------------------------------------------------------------
+Learning rate for Adam optimizer (0.0005). Controls step size per update.
+
+--------------------------------------------------------------------------------
+Line 18: N_COLLOCATION = 400
+--------------------------------------------------------------------------------
+Number of time points sampled uniformly in [0, T_MAX] for physics/conservation loss.
+
+--------------------------------------------------------------------------------
+Line 19: W_PHYSICS = 20.0
+--------------------------------------------------------------------------------
+Weight multiplier for the physics (ODE residual) loss term in total loss.
+
+--------------------------------------------------------------------------------
+Line 20: W_IC = 100.0
+--------------------------------------------------------------------------------
+Weight multiplier for initial condition loss — strongly enforces t=0 values.
+
+--------------------------------------------------------------------------------
+Line 21: W_CONSERVATION = 10.0
+--------------------------------------------------------------------------------
+Weight multiplier for S+I+R=1 conservation loss.
+
+--------------------------------------------------------------------------------
+Line 22: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating hyperparameters from plot styling.
+
+--------------------------------------------------------------------------------
+Line 23: # Plot colors: blue = Susceptible, red = Infected, green = Recovered
+--------------------------------------------------------------------------------
+Comment describing color scheme used in result plots.
+
+--------------------------------------------------------------------------------
+Line 24: COMPARTMENT_COLORS = {
+--------------------------------------------------------------------------------
+Starts a dictionary mapping compartment names to hex color codes.
+
+--------------------------------------------------------------------------------
+Line 25:     "S": "#0066CC",
+--------------------------------------------------------------------------------
+Blue hex color for Susceptible compartment plots.
+
+--------------------------------------------------------------------------------
+Line 26:     "I": "#CC0000",
+--------------------------------------------------------------------------------
+Red hex color for Infected compartment plots.
+
+--------------------------------------------------------------------------------
+Line 27:     "R": "#228B22",
+--------------------------------------------------------------------------------
+Green hex color for Recovered compartment plots.
+
+--------------------------------------------------------------------------------
+Line 28: }
+--------------------------------------------------------------------------------
+Closes the COMPARTMENT_COLORS dictionary.
+
+--------------------------------------------------------------------------------
+Line 29: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating constants from functions.
+
+--------------------------------------------------------------------------------
+Line 30: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 31: def sir_ode(y, t, beta, gamma):
+--------------------------------------------------------------------------------
+Defines the SIR right-hand side for SciPy's odeint. y is state vector [S,I,R];
+t is time (required by odeint signature even if ODE is autonomous).
+
+--------------------------------------------------------------------------------
+Line 32:     s, i, r = y
+--------------------------------------------------------------------------------
+Unpacks current S, I, R values from the state vector y.
+
+--------------------------------------------------------------------------------
+Line 33:     ds = -beta * s * i
+--------------------------------------------------------------------------------
+Rate of change of S: susceptible decrease due to infection.
+
+--------------------------------------------------------------------------------
+Line 34:     di = beta * s * i - gamma * i
+--------------------------------------------------------------------------------
+Rate of change of I: new infections minus recoveries.
+
+--------------------------------------------------------------------------------
+Line 35:     dr = gamma * i
+--------------------------------------------------------------------------------
+Rate of change of R: recovered individuals increase as infected recover.
+
+--------------------------------------------------------------------------------
+Line 36:     return [ds, di, dr]
+--------------------------------------------------------------------------------
+Returns derivatives as a list for odeint (order must match y0).
+
+--------------------------------------------------------------------------------
+Line 37: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating sir_ode from numerical_solution.
+
+--------------------------------------------------------------------------------
+Line 38: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 39: def numerical_solution(t_eval, beta, gamma, s0, i0, r0):
+--------------------------------------------------------------------------------
+Wrapper to compute reference SIR solution on times t_eval using SciPy.
+
+--------------------------------------------------------------------------------
+Line 40:     y0 = [s0, i0, r0]
+--------------------------------------------------------------------------------
+Initial state vector for the ODE solver.
+
+--------------------------------------------------------------------------------
+Line 41:     return odeint(sir_ode, y0, t_eval, args=(beta, gamma))
+--------------------------------------------------------------------------------
+Calls odeint to integrate from y0 over t_eval. args passes beta and gamma into
+sir_ode. Returns array of shape (len(t_eval), 3).
+
+--------------------------------------------------------------------------------
+Line 42: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating helper functions from train().
+
+--------------------------------------------------------------------------------
+Line 43: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 44: def train():
+--------------------------------------------------------------------------------
+Defines the main training loop; returns trained model and device.
+
+--------------------------------------------------------------------------------
+Line 45:     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+--------------------------------------------------------------------------------
+Selects GPU if CUDA is available, otherwise CPU, for all tensor operations.
+
+--------------------------------------------------------------------------------
+Line 46:     model = SIRPINN().to(device)
+--------------------------------------------------------------------------------
+Creates a new SIRPINN instance and moves its parameters to the chosen device.
+
+--------------------------------------------------------------------------------
+Line 47:     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+--------------------------------------------------------------------------------
+Creates Adam optimizer over all model parameters with learning rate LR.
+
+--------------------------------------------------------------------------------
+Line 48: (blank line)
+--------------------------------------------------------------------------------
+Blank line inside train() for readability.
+
+--------------------------------------------------------------------------------
+Line 49:     t_collocation = torch.linspace(0, T_MAX, N_COLLOCATION, device=device).unsqueeze(1)
+--------------------------------------------------------------------------------
+Creates 400 evenly spaced times from 0 to T_MAX on device. unsqueeze(1) shapes
+(N, 1) so each row is one time input for the network.
+
+--------------------------------------------------------------------------------
+Line 50:     t0 = torch.zeros(1, 1, device=device)
+--------------------------------------------------------------------------------
+Single tensor [[0.0]] for evaluating initial conditions at t = 0.
+
+--------------------------------------------------------------------------------
+Line 51: (blank line)
+--------------------------------------------------------------------------------
+Blank line before training loop.
+
+--------------------------------------------------------------------------------
+Line 52:     for epoch in range(1, EPOCHS + 1):
+--------------------------------------------------------------------------------
+Loops epochs 1 through EPOCHS (20000). Each iteration is one optimizer step.
+
+--------------------------------------------------------------------------------
+Line 53:         optimizer.zero_grad()
+--------------------------------------------------------------------------------
+Clears gradients from previous epoch so they are not accumulated incorrectly.
+
+--------------------------------------------------------------------------------
+Line 54: (blank line)
+--------------------------------------------------------------------------------
+Blank line inside loop for readability.
+
+--------------------------------------------------------------------------------
+Line 55:         f_s, f_i, f_r = sir_residuals(t_collocation, model, BETA, GAMMA)
+--------------------------------------------------------------------------------
+Computes ODE residuals at all collocation points using current model weights.
+
+--------------------------------------------------------------------------------
+Line 56:         loss_physics = torch.mean(f_s ** 2 + f_i ** 2 + f_r ** 2)
+--------------------------------------------------------------------------------
+Physics loss: mean squared residual across all three equations and time points.
+
+--------------------------------------------------------------------------------
+Line 57:         loss_ic = initial_condition_loss(model, t0, S0, I0, R0)
+--------------------------------------------------------------------------------
+Initial condition loss at t = 0 vs S0, I0, R0.
+
+--------------------------------------------------------------------------------
+Line 58:         loss_cons = conservation_loss(model, t_collocation)
+--------------------------------------------------------------------------------
+Conservation loss: penalizes S+I+R ≠ 1 at collocation points.
+
+--------------------------------------------------------------------------------
+Line 59: (blank line)
+--------------------------------------------------------------------------------
+Blank line before total loss computation.
+
+--------------------------------------------------------------------------------
+Line 60:         loss = W_PHYSICS * loss_physics + W_IC * loss_ic + W_CONSERVATION * loss_cons
+--------------------------------------------------------------------------------
+Weighted sum of three loss components — the scalar minimized during training.
+
+--------------------------------------------------------------------------------
+Line 61:         loss.backward()
+--------------------------------------------------------------------------------
+Backpropagation: computes gradients of loss with respect to all model parameters.
+
+--------------------------------------------------------------------------------
+Line 62:         optimizer.step()
+--------------------------------------------------------------------------------
+Adam updates model weights using computed gradients.
+
+--------------------------------------------------------------------------------
+Line 63: (blank line)
+--------------------------------------------------------------------------------
+Blank line before logging block.
+
+--------------------------------------------------------------------------------
+Line 64:         if epoch % 1000 == 0 or epoch == 1:
+--------------------------------------------------------------------------------
+Prints progress on epoch 1 and every 1000 epochs (1, 1000, 2000, ...).
+
+--------------------------------------------------------------------------------
+Line 65:             print(
+--------------------------------------------------------------------------------
+Starts multi-line print of training metrics.
+
+--------------------------------------------------------------------------------
+Line 66:                 f"Epoch {epoch:5d} | loss={loss.item():.6f} "
+--------------------------------------------------------------------------------
+Epoch number (5-digit width) and total loss (6 decimal places). .item() gets
+Python float from scalar tensor.
+
+--------------------------------------------------------------------------------
+Line 67:                 f"| physics={loss_physics.item():.6f} "
+--------------------------------------------------------------------------------
+Physics loss component in the log line.
+
+--------------------------------------------------------------------------------
+Line 68:                 f"| ic={loss_ic.item():.6f} "
+--------------------------------------------------------------------------------
+Initial condition loss component in the log line.
+
+--------------------------------------------------------------------------------
+Line 69:                 f"| cons={loss_cons.item():.6f}"
+--------------------------------------------------------------------------------
+Conservation loss component; closes the formatted log string.
+
+--------------------------------------------------------------------------------
+Line 70:             )
+--------------------------------------------------------------------------------
+Closes the print() call.
+
+--------------------------------------------------------------------------------
+Line 71: (blank line)
+--------------------------------------------------------------------------------
+Blank line after loop.
+
+--------------------------------------------------------------------------------
+Line 72:     return model, device
+--------------------------------------------------------------------------------
+Returns trained model and device so plot_results can use them.
+
+--------------------------------------------------------------------------------
+Line 73: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating train() from plot_results().
+
+--------------------------------------------------------------------------------
+Line 74: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 75: def plot_results(model, device):
+--------------------------------------------------------------------------------
+Plots PINN predictions vs SciPy numerical solution and saves/shows figure.
+
+--------------------------------------------------------------------------------
+Line 76:     t_eval = np.linspace(0, T_MAX, 500)
+--------------------------------------------------------------------------------
+500 evenly spaced times for smooth plotting curves (NumPy array).
+
+--------------------------------------------------------------------------------
+Line 77:     t_tensor = torch.tensor(t_eval, dtype=torch.float32, device=device).unsqueeze(1)
+--------------------------------------------------------------------------------
+Converts times to float32 PyTorch tensor on same device as model; shape (500, 1).
+
+--------------------------------------------------------------------------------
+Line 78: (blank line)
+--------------------------------------------------------------------------------
+Blank line before inference.
+
+--------------------------------------------------------------------------------
+Line 79:     with torch.no_grad():
+--------------------------------------------------------------------------------
+Disables gradient computation for inference (faster, less memory).
+
+--------------------------------------------------------------------------------
+Line 80:         pred = model(t_tensor).cpu().numpy()
+--------------------------------------------------------------------------------
+Forward pass on all plot times; moves result to CPU and converts to NumPy array.
+
+--------------------------------------------------------------------------------
+Line 81: (blank line)
+--------------------------------------------------------------------------------
+Blank line before reference solution.
+
+--------------------------------------------------------------------------------
+Line 82:     exact = numerical_solution(t_eval, BETA, GAMMA, S0, I0, R0)
+--------------------------------------------------------------------------------
+SciPy reference solution on same time grid for comparison.
+
+--------------------------------------------------------------------------------
+Line 83: (blank line)
+--------------------------------------------------------------------------------
+Blank line before plotting setup.
+
+--------------------------------------------------------------------------------
+Line 84:     fig, ax = plt.subplots(figsize=(10, 6))
+--------------------------------------------------------------------------------
+Creates figure 10×6 inches and a single axes object for plotting.
+
+--------------------------------------------------------------------------------
+Line 85:     compartments = [
+--------------------------------------------------------------------------------
+List of tuples: (display name, column index, color) for each compartment.
+
+--------------------------------------------------------------------------------
+Line 86:         ("Susceptible", 0, COMPARTMENT_COLORS["S"]),
+--------------------------------------------------------------------------------
+Susceptible: index 0 in output, blue color.
+
+--------------------------------------------------------------------------------
+Line 87:         ("Infected", 1, COMPARTMENT_COLORS["I"]),
+--------------------------------------------------------------------------------
+Infected: index 1, red color.
+
+--------------------------------------------------------------------------------
+Line 88:         ("Recovered", 2, COMPARTMENT_COLORS["R"]),
+--------------------------------------------------------------------------------
+Recovered: index 2, green color.
+
+--------------------------------------------------------------------------------
+Line 89:     ]
+--------------------------------------------------------------------------------
+Closes compartments list.
+
+--------------------------------------------------------------------------------
+Line 90: (blank line)
+--------------------------------------------------------------------------------
+Blank line before plot loop.
+
+--------------------------------------------------------------------------------
+Line 91:     for name, idx, color in compartments:
+--------------------------------------------------------------------------------
+Iterates over each compartment to plot SciPy and PINN curves.
+
+--------------------------------------------------------------------------------
+Line 92:         ax.plot(
+--------------------------------------------------------------------------------
+Starts plot call for SciPy reference curve.
+
+--------------------------------------------------------------------------------
+Line 93:             t_eval,
+--------------------------------------------------------------------------------
+X-axis: time values.
+
+--------------------------------------------------------------------------------
+Line 94:             exact[:, idx],
+--------------------------------------------------------------------------------
+Y-axis: SciPy solution for compartment idx.
+
+--------------------------------------------------------------------------------
+Line 95:             color=color,
+--------------------------------------------------------------------------------
+Compartment-specific color (blue/red/green).
+
+--------------------------------------------------------------------------------
+Line 96:             linestyle="--",
+--------------------------------------------------------------------------------
+Dashed line style for true/reference SciPy data.
+
+--------------------------------------------------------------------------------
+Line 97:             linewidth=2.5,
+--------------------------------------------------------------------------------
+Line thickness for visibility.
+
+--------------------------------------------------------------------------------
+Line 98:             label=f"{name} (SciPy)",
+--------------------------------------------------------------------------------
+Legend label identifying this as the SciPy reference.
+
+--------------------------------------------------------------------------------
+Line 99:         )
+--------------------------------------------------------------------------------
+Closes ax.plot for SciPy curve.
+
+--------------------------------------------------------------------------------
+Line 100:         ax.plot(
+--------------------------------------------------------------------------------
+Starts plot call for PINN prediction curve.
+
+--------------------------------------------------------------------------------
+Line 101:             t_eval,
+--------------------------------------------------------------------------------
+X-axis: same time values as SciPy plot.
+
+--------------------------------------------------------------------------------
+Line 102:             pred[:, idx],
+--------------------------------------------------------------------------------
+Y-axis: PINN prediction for compartment idx.
+
+--------------------------------------------------------------------------------
+Line 103:             color=color,
+--------------------------------------------------------------------------------
+Same compartment color as SciPy (distinguish by linestyle).
+
+--------------------------------------------------------------------------------
+Line 104:             linestyle="-",
+--------------------------------------------------------------------------------
+Solid line for PINN predictions.
+
+--------------------------------------------------------------------------------
+Line 105:             linewidth=2.0,
+--------------------------------------------------------------------------------
+Slightly thinner than dashed reference lines.
+
+--------------------------------------------------------------------------------
+Line 106:             label=f"{name} (PINN)",
+--------------------------------------------------------------------------------
+Legend label identifying this as the PINN prediction.
+
+--------------------------------------------------------------------------------
+Line 107:         )
+--------------------------------------------------------------------------------
+Closes ax.plot for PINN curve.
+
+--------------------------------------------------------------------------------
+Line 108: (blank line)
+--------------------------------------------------------------------------------
+Blank line after plot loop.
+
+--------------------------------------------------------------------------------
+Line 109:     ax.set_xlabel("Time", fontsize=12)
+--------------------------------------------------------------------------------
+X-axis label with font size 12.
+
+--------------------------------------------------------------------------------
+Line 110:     ax.set_ylabel("Population fraction", fontsize=12)
+--------------------------------------------------------------------------------
+Y-axis label: values are fractions of total population.
+
+--------------------------------------------------------------------------------
+Line 111:     ax.set_title(
+--------------------------------------------------------------------------------
+Starts title configuration.
+
+--------------------------------------------------------------------------------
+Line 112:         f"SIR Model: PINN vs SciPy (β={BETA}, γ={GAMMA})",
+--------------------------------------------------------------------------------
+Plot title including current β and γ values.
+
+--------------------------------------------------------------------------------
+Line 113:         fontsize=13,
+--------------------------------------------------------------------------------
+Title font size.
+
+--------------------------------------------------------------------------------
+Line 114:     )
+--------------------------------------------------------------------------------
+Closes set_title call.
+
+--------------------------------------------------------------------------------
+Line 115:     ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=10)
+--------------------------------------------------------------------------------
+Places legend outside plot on the right (avoids covering curves).
+
+--------------------------------------------------------------------------------
+Line 116:     ax.grid(True, alpha=0.3)
+--------------------------------------------------------------------------------
+Light grid on axes for easier reading of values.
+
+--------------------------------------------------------------------------------
+Line 117:     fig.tight_layout()
+--------------------------------------------------------------------------------
+Adjusts subplot padding so labels and title fit cleanly.
+
+--------------------------------------------------------------------------------
+Line 118:     fig.savefig("sir_pinn_results.png", dpi=150)
+--------------------------------------------------------------------------------
+Saves figure to sir_pinn_results.png at 150 dots per inch.
+
+--------------------------------------------------------------------------------
+Line 119:     print("Saved plot to sir_pinn_results.png")
+--------------------------------------------------------------------------------
+Prints confirmation that the image file was saved.
+
+--------------------------------------------------------------------------------
+Line 120:     plt.show()
+--------------------------------------------------------------------------------
+Opens interactive window displaying the plot (if GUI backend available).
+
+--------------------------------------------------------------------------------
+Line 121: (blank line)
+--------------------------------------------------------------------------------
+Blank line before main block.
+
+--------------------------------------------------------------------------------
+Line 122: (blank line)
+--------------------------------------------------------------------------------
+Blank line for readability.
+
+--------------------------------------------------------------------------------
+Line 123: if __name__ == "__main__":
+--------------------------------------------------------------------------------
+Runs following block only when train.py is executed directly (not when imported).
+
+--------------------------------------------------------------------------------
+Line 124:     model, device = train()
+--------------------------------------------------------------------------------
+Calls train() and stores returned model and device.
+
+--------------------------------------------------------------------------------
+Line 125:     plot_results(model, device)
+--------------------------------------------------------------------------------
+Plots and saves comparison after training completes.
+
+--------------------------------------------------------------------------------
+Line 126: (blank line)
+--------------------------------------------------------------------------------
+End of file.
+
+
+================================================================================
+FILE: requirements.txt
+================================================================================
+Purpose: Lists Python package dependencies and minimum versions for pip install.
+
+--------------------------------------------------------------------------------
+Line 1: torch>=1.10.0,<2.0.0
+--------------------------------------------------------------------------------
+PyTorch: version at least 1.10.0 but below 2.0.0 (compatible with Python 3.7).
+
+--------------------------------------------------------------------------------
+Line 2: numpy>=1.19.0
+--------------------------------------------------------------------------------
+NumPy: array operations; minimum version 1.19.0.
+
+--------------------------------------------------------------------------------
+Line 3: matplotlib>=3.3.0
+--------------------------------------------------------------------------------
+Matplotlib: plotting library; minimum version 3.3.0.
+
+--------------------------------------------------------------------------------
+Line 4: scipy>=1.5.0
+--------------------------------------------------------------------------------
+SciPy: scientific computing (odeint ODE solver); minimum version 1.5.0.
+
+--------------------------------------------------------------------------------
+Line 5: (blank line)
+--------------------------------------------------------------------------------
+Trailing newline; no fifth dependency.
+
+
+================================================================================
+FILE: .gitignore
+================================================================================
+Purpose: Tells Git which files/folders to exclude from version control.
+
+--------------------------------------------------------------------------------
+Line 1: # Virtual environments
+--------------------------------------------------------------------------------
+Comment: following entries ignore Python virtual environment directories.
+
+--------------------------------------------------------------------------------
+Line 2: venv/
+--------------------------------------------------------------------------------
+Ignore the venv/ folder (this project's virtual environment).
+
+--------------------------------------------------------------------------------
+Line 3: .venv/
+--------------------------------------------------------------------------------
+Ignore alternate common name for virtual environments.
+
+--------------------------------------------------------------------------------
+Line 4: env/
+--------------------------------------------------------------------------------
+Ignore another common virtual environment folder name.
+
+--------------------------------------------------------------------------------
+Line 5: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating sections.
+
+--------------------------------------------------------------------------------
+Line 6: # Python
+--------------------------------------------------------------------------------
+Comment: following entries ignore Python build/cache artifacts.
+
+--------------------------------------------------------------------------------
+Line 7: __pycache__/
+--------------------------------------------------------------------------------
+Ignore bytecode cache directories created when Python runs modules.
+
+--------------------------------------------------------------------------------
+Line 8: *.py[cod]
+--------------------------------------------------------------------------------
+Ignore .pyc, .pyo, .pyd compiled Python files in any directory.
+
+--------------------------------------------------------------------------------
+Line 9: *$py.class
+--------------------------------------------------------------------------------
+Ignore Jython-style compiled class files.
+
+--------------------------------------------------------------------------------
+Line 10: *.so
+--------------------------------------------------------------------------------
+Ignore shared object / native extension binaries.
+
+--------------------------------------------------------------------------------
+Line 11: .Python
+--------------------------------------------------------------------------------
+Ignore virtualenv-related .Python marker file.
+
+--------------------------------------------------------------------------------
+Line 12: *.egg-info/
+--------------------------------------------------------------------------------
+Ignore package metadata folders from setuptools installs.
+
+--------------------------------------------------------------------------------
+Line 13: dist/
+--------------------------------------------------------------------------------
+Ignore distribution/build output directory.
+
+--------------------------------------------------------------------------------
+Line 14: build/
+--------------------------------------------------------------------------------
+Ignore build temporary directory from packaging.
+
+--------------------------------------------------------------------------------
+Line 15: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating sections.
+
+--------------------------------------------------------------------------------
+Line 16: # IDE
+--------------------------------------------------------------------------------
+Comment: ignore editor/IDE configuration folders and swap files.
+
+--------------------------------------------------------------------------------
+Line 17: .idea/
+--------------------------------------------------------------------------------
+Ignore JetBrains IDE (PyCharm, IntelliJ) project settings.
+
+--------------------------------------------------------------------------------
+Line 18: .vscode/
+--------------------------------------------------------------------------------
+Ignore Visual Studio Code workspace settings.
+
+--------------------------------------------------------------------------------
+Line 19: *.swp
+--------------------------------------------------------------------------------
+Ignore Vim swap files.
+
+--------------------------------------------------------------------------------
+Line 20: *.swo
+--------------------------------------------------------------------------------
+Ignore additional Vim swap file extension.
+
+--------------------------------------------------------------------------------
+Line 21: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating sections.
+
+--------------------------------------------------------------------------------
+Line 22: # OS
+--------------------------------------------------------------------------------
+Comment: ignore operating-system-generated files.
+
+--------------------------------------------------------------------------------
+Line 23: .DS_Store
+--------------------------------------------------------------------------------
+Ignore macOS folder metadata files.
+
+--------------------------------------------------------------------------------
+Line 24: Thumbs.db
+--------------------------------------------------------------------------------
+Ignore Windows thumbnail cache database.
+
+--------------------------------------------------------------------------------
+Line 25: (blank line)
+--------------------------------------------------------------------------------
+Blank line separating sections.
+
+--------------------------------------------------------------------------------
+Line 26: # Project outputs
+--------------------------------------------------------------------------------
+Comment: ignore generated artifacts from running this project.
+
+--------------------------------------------------------------------------------
+Line 27: *.png
+--------------------------------------------------------------------------------
+Ignore PNG images (e.g. sir_pinn_results.png from training).
+
+--------------------------------------------------------------------------------
+Line 28: *.pt
+--------------------------------------------------------------------------------
+Ignore PyTorch checkpoint files with .pt extension.
+
+--------------------------------------------------------------------------------
+Line 29: *.pth
+--------------------------------------------------------------------------------
+Ignore PyTorch checkpoint files with .pth extension.
+
+--------------------------------------------------------------------------------
+Line 30: checkpoints/
+--------------------------------------------------------------------------------
+Ignore directory used for saved model checkpoints.
+
+--------------------------------------------------------------------------------
+Line 31: (blank line)
+--------------------------------------------------------------------------------
+End of .gitignore file.
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
